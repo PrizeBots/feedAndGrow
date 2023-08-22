@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bots Sim</title>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background-color: rgb(118, 113, 113);
+    }
+    #game-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  #canvas {
+    display: block;
+    border: 1px solid black; 
+    margin: 10px;
+  }
+
+  #player-ui {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 10px;
+  }
+
+    #toggle-container {
+      display: flex;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .toggle-label {
+      margin-right: 5px;
+    }
+
+    .combo-box {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .combo-box label {
+      margin-bottom: 5px;
+    }
+
+  #ui-column {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      margin: 10px;
+      color: black;
+   
+    }
+
+  .bot-count-label {
+    font-size: 18px;
+    margin-bottom: 10px;
+  }
+  </style>
+</head>
+<body>
+    <div id="ui-column"> <!-- Move this div above the "game-container" div -->
+      <div class="bot-count-label">Big Bots: <span id="big-bots-count">0</span></div>
+      <div class="bot-count-label">Baby Bots: <span id="baby-bots-count">0</span></div>
+    </div>
+  
+    <div id="game-container">
+      <canvas id="canvas" width="800" height="800"></canvas>
+      <div id="player-ui">
+        <div class="combo-box">
+          <label for="toggle-switch" class="toggle-label">Red Food</label>
+          <input type="checkbox" id="toggle-switch">
+          <div id="red-circle-indicator"></div>
+        </div>
+      </div>
+    </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const canvas = document.getElementById('canvas');
+ 
+    const ctx = canvas.getContext('2d');
+    const socket = io();
+
+    const bots = {};
+    let isPlacingRedCircle = false;
+    let redCircleX = 0;
+    let redCircleY = 0;
+
+    const blipAudio = new Audio('blip.wav');
+    const getAudio = new Audio('get.wav');
+
+
+      // Function to update the bot count labels
+      function updateBotCountLabels() {
+      let bigBotsCount = 0;
+      let babyBotsCount = 0;
+
+      for (const bot of Object.values(bots)) {
+        if (bot.size >= 5) {
+          bigBotsCount++;
+        } else {
+          babyBotsCount++;
+        }
+      }
+
+      document.getElementById('big-bots-count').textContent = bigBotsCount;
+      document.getElementById('baby-bots-count').textContent = babyBotsCount;
+    }
+
+
+    function drawCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (const bot of Object.values(bots)) {
+        drawBot(bot);
+      }
+
+      // Draw all red circles
+      for (const redCircle of redCircles) {
+        drawRedCircle(redCircle.x, redCircle.y);
+      }
+
+      if (isPlacingRedCircle) {
+        drawRedCircle(redCircleX, redCircleY);
+      }
+
+      requestAnimationFrame(drawCanvas);
+    }
+
+    canvas.addEventListener('click', playBlipSound);
+
+    function playBlipSound() {
+        blipAudio.pause();
+    blipAudio.currentTime = 0;
+    blipAudio.play();
+    }
+    
+    function playGetSound() {
+        getAudio.pause();
+    getAudio.currentTime = 0;
+    getAudio.play();
+    }
+
+  canvas.addEventListener('mousemove', (e) => {
+    if (isPlacingRedCircle) {
+      const rect = canvas.getBoundingClientRect();
+      redCircleX = e.clientX - rect.left;
+      redCircleY = e.clientY - rect.top;
+
+      // Redraw everything (bots and the red circle) without clearing the canvas
+      for (const bot of Object.values(bots)) {
+        drawBot(bot);
+      }
+      drawRedCircle(redCircleX, redCircleY);
+    }
+  });
+
+
+  // Handle canvas click event
+  canvas.addEventListener('click', (e) => {
+    if (isPlacingRedCircle) {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      // Send the click position to the server to place a new red circle
+      socket.emit('placeRedCircle', { x, y });
+    }
+  });
+
+
+    // Listen for 'bots' message from the server to update the bot data
+    socket.on('bots', (updatedBots) => {
+      for (const bot of updatedBots) {
+        bots[bot.id] = bot;
+      }
+
+      // Update the bot count labels
+      updateBotCountLabels();
+    });
+
+
+  socket.on('bots', (updatedBots) => {
+    // Update the bots data
+    for (const bot of updatedBots) {
+      bots[bot.id] = bot;
+    }
+  });
+  socket.on('botRemoved', (botId) => {
+      removeBotFromCanvas(botId);
+    });
+  socket.on('newBot', (bot) => {
+    bots[bot.id] = bot;
+      // Update the bot count labels
+      updateBotCountLabels();
+  });
+
+  socket.on('botDisconnected', (botId) => {
+    delete bots[botId];
+     // Update the bot count labels
+     updateBotCountLabels();
+  });
+
+
+  socket.on('redCircles', (updatedRedCircles) => {
+    // Update the redCircles data
+    redCircles = updatedRedCircles;
+    // Redraw all red dots on the canvas
+    drawCanvas();
+  });
+  socket.on('redCircleConsumedByBot', ({ botId, redDotId }) => {
+    console.log("  socket.on('redCircleConsumedByBot', ({ botId, redDotId }) => {");
+    playGetSound();
+  
+ 
+    // Check if the botId matches the client's socket.id (for self-bot consumption)
+    // You can modify this condition based on your use case
+    if (botId === socket.id) {
+      // Trigger the sound playback for a consumed red circle
+      playGetSound();
+    }
+  });
+  requestAnimationFrame(drawCanvas);
+
+
+  function removeBotFromCanvas(botId) {
+      delete bots[botId];
+    }
+
+
+  // Calculate the distance between two points
+  function getDistance(x1, y1, x2, y2) {
+    return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+  }
+
+
+    function drawBot(bot) {
+        const botSize = 10 + bot.consumedRedDots * 2; // Increase the bot's size based on consumed red dots
+
+        ctx.fillStyle = bot.color;
+        ctx.fillRect(bot.x, bot.y, bot.size, bot.size);
+
+      // Draw health bar
+      ctx.fillStyle = "green";
+      const healthBarWidth = 10; // Health bar width (same as the bot square width)
+      const healthBarHeight = 2; // Health bar height
+      const healthPercentage = bot.health / 100; // Assuming each bot has a health value from 0 to 100
+      const healthBarWidthWithHealth = healthBarWidth * healthPercentage;
+      const healthBarX = bot.x;
+      const healthBarY = bot.y - 5; // Place the health bar just above the bot
+      ctx.fillRect(healthBarX, healthBarY, healthBarWidthWithHealth, healthBarHeight);
+    }
+
+
+    function moveBotTowardsRedDot(bot, redDot) {
+    const dx = redDot.x - bot.x;
+    const dy = redDot.y - bot.y;
+    const distance = Math.sqrt(dx ** 2 + dy ** 2);
+    const speed = bot.speed;
+
+    if (distance > speed) {
+      // Move the bot closer to the red dot
+      const ratio = speed / distance;
+      bot.x += dx * ratio;
+      bot.y += dy * ratio;
+    } else {
+      // The bot is close enough to consume the red dot
+      consumeRedDot(bot, redDot);
+    }
+  }
+
+
+  function playRedDotConsumedSound() {
+    // Assuming the 'blip.wav' sound is in the same directory as the HTML file
+    playGetSound();
+    console.log("function playRedDotConsumedSound()");
+  }
+
+
+  function consumeRedDot(bot, redDot) {
+    // Play the "blip.wav" audio
+
+    playGetSound();
+    console.log("  function consumeRedDot(bot, redDot) {");
+
+    // Increase the bot's consumedRedDots count
+    bot.consumedRedDots++;
+
+    // Remove the consumed red dot from the array
+    const index = redCircles.indexOf(redDot);
+    if (index !== -1) {
+      redCircles.splice(index, 1);
+    }
+  }
+
+    function drawRedCircle(x, y) {
+      ctx.fillStyle = "red";
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    function updateRedCircleIndicator() {
+      const indicator = document.getElementById('red-circle-indicator');
+      indicator.style.display = isPlacingRedCircle ? 'inline-block' : 'none';
+    }
+
+
+
+    const toggleSwitch = document.getElementById('toggle-switch');
+    toggleSwitch.addEventListener('change', () => {
+      isPlacingRedCircle = toggleSwitch.checked;
+      updateRedCircleIndicator();
+    });
+
+    toggleSwitch.addEventListener('change', () => {
+  isPlacingRedCircle = toggleSwitch.checked;
+  if (!isPlacingRedCircle) {
+    // When red circle placement is turned off, clear the red circle on the server
+    socket.emit('placeRedCircle', null);
+  }
+  updateRedCircleIndicator();
+});
+
+
+    updateRedCircleIndicator();
+  </script>
+</body>
+</html>
